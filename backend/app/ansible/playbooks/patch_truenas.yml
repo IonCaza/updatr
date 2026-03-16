@@ -1,0 +1,60 @@
+---
+- name: Patch TrueNAS SCALE hosts
+  hosts: truenas
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify midclt is available
+      ansible.builtin.command: which midclt
+      changed_when: false
+      register: midclt_check
+      failed_when: midclt_check.rc != 0
+
+    - name: Record current system version
+      ansible.builtin.command: midclt call system.version
+      changed_when: false
+      register: version_before
+
+    - name: Check for available updates
+      ansible.builtin.command: midclt call update.check_available
+      changed_when: false
+      register: update_check
+      failed_when: update_check.rc != 0
+
+    - name: Set update availability fact
+      ansible.builtin.set_fact:
+        update_available: "{{ 'AVAILABLE' in update_check.stdout }}"
+
+    - name: Download update
+      ansible.builtin.command: midclt call --job update.download
+      when: update_available | bool
+      register: download_result
+      changed_when: download_result.rc == 0
+      timeout: 1800
+
+    - name: Apply update to new boot environment
+      ansible.builtin.command: midclt call --job update.update
+      when: update_available | bool
+      register: update_result
+      changed_when: update_result.rc == 0
+      timeout: 2700
+
+    - name: Reboot into new boot environment
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+        connect_timeout: 30
+        msg: "Rebooting into updated TrueNAS boot environment"
+      when:
+        - update_available | bool
+        - update_result is changed
+        - reboot_policy | default('if-required') in ['auto', 'if-required']
+
+    - name: Verify system version changed after update
+      ansible.builtin.command: midclt call system.version
+      changed_when: false
+      register: version_after
+      when:
+        - update_available | bool
+        - update_result is changed
+        - reboot_policy | default('if-required') in ['auto', 'if-required']
+      failed_when: version_after.stdout | trim == version_before.stdout | trim

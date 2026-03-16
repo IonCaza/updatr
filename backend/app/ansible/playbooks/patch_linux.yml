@@ -1,0 +1,48 @@
+---
+- name: Patch Linux hosts
+  hosts: linux
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Update apt cache and upgrade all packages (Debian/Ubuntu)
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: safe
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+      register: apt_result
+
+    - name: Upgrade all packages via dnf (RHEL/Fedora)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        security: "{{ 'yes' if 'security' in patch_categories | default(['all']) else 'no' }}"
+      when: ansible_os_family == "RedHat"
+      register: dnf_result
+
+    - name: Check if reboot is required (Debian/Ubuntu)
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_file
+      when: ansible_os_family == "Debian"
+
+    - name: Check if reboot is required (RHEL/Fedora)
+      ansible.builtin.command: needs-restarting -r
+      register: needs_restart
+      failed_when: false
+      changed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Set reboot_needed fact
+      ansible.builtin.set_fact:
+        reboot_needed: >-
+          {{ (ansible_os_family == 'Debian' and reboot_file.stat.exists | default(false)) or
+             (ansible_os_family == 'RedHat' and needs_restart.rc | default(0) == 1) }}
+
+    - name: Reboot if required and policy allows
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        msg: "Rebooting after patching"
+      when:
+        - reboot_needed | bool
+        - reboot_policy | default('if-required') in ['auto', 'if-required']

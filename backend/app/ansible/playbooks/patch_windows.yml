@@ -1,0 +1,25 @@
+---
+- name: Patch Windows hosts
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Install Windows updates
+      ansible.windows.win_updates:
+        category_names:
+          - SecurityUpdates
+          - CriticalUpdates
+          - UpdateRollups
+          - DefinitionUpdates
+          - Updates
+        state: installed
+        reboot: "{{ (reboot_policy | default('if-required')) != 'never' }}"
+        reboot_timeout: 600
+      register: update_result
+
+    - name: Report update results
+      ansible.builtin.debug:
+        msg: >-
+          Installed {{ update_result.installed_update_count | default(0) }} updates.
+          Rebooted: {{ update_result.rebooted | default(false) }}.
+          Reboot still required: {{ update_result.reboot_required | default(false) }}.
+          Found {{ update_result.found_update_count | default(0) }} updates total.

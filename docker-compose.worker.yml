@@ -1,0 +1,38 @@
+# Remote Celery worker deployment
+#
+# Deploy this on a remote site to distribute patch/compliance tasks.
+# The worker connects back to the primary site's Redis and Postgres over VPN.
+#
+# Usage:
+#   1. Copy this file and backend/ to the remote host
+#   2. Set the environment variables below (or use a .env file)
+#   3. Run: docker compose -f docker-compose.worker.yml up -d
+#
+# Required env vars:
+#   REDIS_URL        - Redis on the primary site (e.g. redis://:password@10.0.0.1:6379/0)
+#   DATABASE_URL     - Postgres on the primary site (e.g. postgresql+asyncpg://user:pass@10.0.0.1:5432/updatr)
+#   WORKER_SITE      - Queue name this worker consumes (e.g. site-b)
+
+services:
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: >-
+      celery -A app.tasks.celery_app worker
+      -Q ${WORKER_SITE:-remote}
+      -l info
+      --hostname=worker@${WORKER_SITE:-remote}
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          pids: 512
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the primary site Postgres}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL to the primary site Redis}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY matching the primary site}
+    restart: unless-stopped

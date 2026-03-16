@@ -1,0 +1,35 @@
+---
+- name: Check Proxmox VE hosts for pending updates
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Verify this is a Proxmox VE host
+      ansible.builtin.command: pveversion
+      changed_when: false
+      register: pve_check
+      failed_when: pve_check.rc != 0
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: List upgradable packages
+      ansible.builtin.shell:
+        cmd: apt list --upgradable 2>/dev/null | grep -v "^Listing"
+      register: apt_upgradable
+      changed_when: false
+      failed_when: false
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_file
+
+    - name: Build compliance result
+      ansible.builtin.set_fact:
+        compliance_result:
+          pending_updates: "{{ apt_upgradable.stdout_lines | default([]) }}"
+          reboot_required: "{{ reboot_file.stat.exists | default(false) }}"
+          update_count: "{{ (apt_upgradable.stdout_lines | default([])) | length }}"

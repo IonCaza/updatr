@@ -1,0 +1,47 @@
+---
+- name: Check Linux hosts for pending updates
+  hosts: linux
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Update apt cache (Debian/Ubuntu)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: List upgradable packages (Debian/Ubuntu)
+      ansible.builtin.shell: apt list --upgradable 2>/dev/null | grep -v "^Listing"
+      register: apt_upgradable
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "Debian"
+
+    - name: Check for updates via dnf (RHEL/Fedora)
+      ansible.builtin.shell: dnf check-update --quiet 2>/dev/null || true
+      register: dnf_updates
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Check if reboot is required (Debian/Ubuntu)
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_file
+      when: ansible_os_family == "Debian"
+
+    - name: Check if reboot is required (RHEL/Fedora)
+      ansible.builtin.command: needs-restarting -r
+      register: needs_restart
+      failed_when: false
+      changed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Build compliance result
+      ansible.builtin.set_fact:
+        compliance_result:
+          pending_updates: "{{ (apt_upgradable.stdout_lines | default([])) + (dnf_updates.stdout_lines | default([])) }}"
+          reboot_required: >-
+            {{ (ansible_os_family == 'Debian' and reboot_file.stat.exists | default(false)) or
+               (ansible_os_family == 'RedHat' and needs_restart.rc | default(0) == 1) }}
+          update_count: "{{ (apt_upgradable.stdout_lines | default([])) | length + (dnf_updates.stdout_lines | default([])) | length }}"

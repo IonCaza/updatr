@@ -1,0 +1,144 @@
+services:
+  postgres:
+    image: postgres:16
+    ports:
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
+    command: ["-p", "${POSTGRES_PORT:-5432}"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-updatr}
+      POSTGRES_USER: ${POSTGRES_USER:-updatr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-updatr_dev}
+      PGPORT: ${POSTGRES_PORT:-5432}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-updatr} -p ${POSTGRES_PORT:-5432}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - updatr-network
+
+  redis:
+    image: redis:7
+    ports:
+      - "${REDIS_BIND:-127.0.0.1}:${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
+    command: ["sh", "-c", "redis-server --port ${REDIS_PORT:-6379} --appendonly yes $${REDIS_PASSWORD:+--requirepass $$REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p ${REDIS_PORT:-6379} $${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - updatr-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_PORT: ${BACKEND_PORT:-8000}
+        NODE_ENV: ${NODE_ENV:-development}
+    ports:
+      - "${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-updatr}:${POSTGRES_PASSWORD:-updatr_dev}@postgres:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-updatr}
+      REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
+      APP_PORT: ${BACKEND_PORT:-8000}
+      NODE_ENV: ${NODE_ENV:-development}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    volumes:
+      - ./backend:/app
+    networks:
+      - updatr-network
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_app worker -Q cm -l info --hostname=worker@cm
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          pids: 512
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-updatr}:${POSTGRES_PASSWORD:-updatr_dev}@postgres:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-updatr}
+      REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
+    volumes:
+      - ./backend:/app
+    networks:
+      - updatr-network
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    restart: unless-stopped
+    depends_on:
+      - celery-worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-updatr}:${POSTGRES_PASSWORD:-updatr_dev}@postgres:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-updatr}
+      REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
+    volumes:
+      - ./backend:/app
+    networks:
+      - updatr-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        APP_PORT: ${FRONTEND_PORT:-3000}
+        NODE_ENV: ${NODE_ENV:-development}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:${BACKEND_PORT:-8000}}
+    ports:
+      - "${FRONTEND_PORT:-3000}:${FRONTEND_PORT:-3000}"
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:${BACKEND_PORT:-8000}}
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${FRONTEND_PORT:-3000}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - updatr-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  updatr-network:
+    driver: bridge

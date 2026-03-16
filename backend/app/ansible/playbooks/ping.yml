@@ -1,0 +1,14 @@
+---
+- name: Connectivity test for Linux hosts
+  hosts: linux
+  gather_facts: false
+  tasks:
+    - name: Ping host
+      ansible.builtin.ping:
+
+- name: Connectivity test for Windows hosts
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Ping Windows host
+      ansible.windows.win_ping:

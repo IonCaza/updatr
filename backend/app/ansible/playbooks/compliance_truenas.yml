@@ -1,0 +1,35 @@
+---
+- name: Check TrueNAS SCALE hosts for pending updates
+  hosts: truenas
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify midclt is available
+      ansible.builtin.command: which midclt
+      changed_when: false
+      register: midclt_check
+      failed_when: midclt_check.rc != 0
+
+    - name: Check for available updates
+      ansible.builtin.command: midclt call update.check_available
+      changed_when: false
+      register: update_check
+      failed_when: update_check.rc != 0
+
+    - name: Get current system version
+      ansible.builtin.command: midclt call system.version
+      changed_when: false
+      register: sys_version
+      failed_when: sys_version.rc != 0
+
+    - name: Build compliance result
+      ansible.builtin.set_fact:
+        compliance_result:
+          pending_updates: >-
+            {{ ['System update available (current: ' +
+                (sys_version.stdout | default('unknown') | trim | regex_replace('"', '')) + ')']
+               if 'AVAILABLE' in (update_check.stdout | default(''))
+               else [] }}
+          reboot_required: false
+          update_count: >-
+            {{ 1 if 'AVAILABLE' in (update_check.stdout | default('')) else 0 }}

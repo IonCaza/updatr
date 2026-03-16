@@ -1,0 +1,52 @@
+---
+- name: Patch Proxmox VE hosts
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  tasks:
+    - name: Verify this is a Proxmox VE host
+      ansible.builtin.command: pveversion
+      changed_when: false
+      register: pve_check
+      failed_when: pve_check.rc != 0
+
+    - name: Update apt cache and dist-upgrade all packages
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        cache_valid_time: 3600
+        dpkg_options: "force-confdef,force-confold"
+        force_apt_get: true
+      register: apt_result
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_file
+
+    - name: Check if running kernel matches installed kernel
+      ansible.builtin.shell:
+        cmd: >-
+          [ "$(uname -r)" !=
+            "$(ls -t /boot/vmlinuz-* 2>/dev/null | head -1 |
+               sed 's|/boot/vmlinuz-||')" ]
+      register: kernel_mismatch
+      changed_when: false
+      failed_when: false
+
+    - name: Set reboot_needed fact
+      ansible.builtin.set_fact:
+        reboot_needed: >-
+          {{ (reboot_file.stat.exists | default(false)) or
+             (kernel_mismatch.rc | default(1) == 0) }}
+
+    - name: Reboot if required and policy allows
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+        connect_timeout: 30
+        msg: "Rebooting after Proxmox VE update"
+      when:
+        - reboot_needed | bool
+        - reboot_policy | default('if-required') in ['auto', 'if-required']
