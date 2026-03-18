@@ -24,3 +24,4 @@ class ComplianceScan(Base):
     reboot_required: Mapped[bool] = mapped_column(Boolean, default=False)
     is_reachable: Mapped[bool] = mapped_column(Boolean, default=True)
     worker_queue: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    raw_log: Mapped[list] = mapped_column(JSON, default=list)

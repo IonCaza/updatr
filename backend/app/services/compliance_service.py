@@ -71,10 +71,10 @@ async def get_hosts_by_status(db: AsyncSession) -> dict:
         }
         if not scan.is_reachable:
             groups["unreachable"].append(entry)
-        elif scan.reboot_required:
-            groups["reboot_required"].append(entry)
         elif not scan.is_compliant:
             groups["non_compliant"].append(entry)
+        elif scan.reboot_required:
+            groups["reboot_required"].append(entry)
         else:
             groups["compliant"].append(entry)
     return groups
@@ -104,6 +104,7 @@ async def get_host_compliance(db: AsyncSession, host_id: str) -> dict | None:
         "is_compliant": scan.is_compliant,
         "is_reachable": scan.is_reachable,
         "reboot_required": scan.reboot_required,
-        "pending_updates": scan.raw_results.get("pending_updates", []) if scan.raw_results else [],
+        "pending_updates": scan.pending_updates or [],
         "scanned_at": scan.scanned_at.isoformat() if scan.scanned_at else None,
+        "raw_log": scan.raw_log or [],
     }

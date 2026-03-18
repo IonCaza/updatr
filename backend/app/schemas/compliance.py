@@ -17,6 +17,12 @@ class PendingUpdate(BaseModel):
     published_date: str | None = None
 
 
+class ScanLogEntry(BaseModel):
+    task: str
+    status: str
+    output: dict = {}
+
+
 class HostComplianceDetail(BaseModel):
     host_id: str
     hostname: str
@@ -27,3 +33,4 @@ class HostComplianceDetail(BaseModel):
     reboot_required: bool
     pending_updates: list[PendingUpdate]
     scanned_at: str | None
+    raw_log: list[ScanLogEntry] = []

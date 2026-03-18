@@ -6,6 +6,12 @@ import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
+interface ScanLogEntry {
+  task: string;
+  status: string;
+  output: { stdout?: string; stderr?: string; msg?: string };
+}
+
 interface HostCompliance {
   host_id: string;
   hostname: string;
@@ -21,6 +27,7 @@ interface HostCompliance {
     published_date?: string;
   }>;
   scanned_at: string | null;
+  raw_log?: ScanLogEntry[];
 }
 
 export default function HostCompliancePage() {
@@ -106,6 +113,45 @@ export default function HostCompliancePage() {
           )}
         </CardContent>
       </Card>
+
+      {data.raw_log && data.raw_log.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Scan Log</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md bg-muted/30 border p-3 space-y-1">
+              {data.raw_log.map((entry, i) => {
+                const detail =
+                  entry.output?.msg || entry.output?.stdout || entry.output?.stderr || "";
+                return (
+                  <div key={i} className="font-mono text-[11px] leading-relaxed">
+                    <span
+                      className={
+                        entry.status === "ok"
+                          ? "text-green-600"
+                          : entry.status === "failed"
+                          ? "text-red-600"
+                          : entry.status === "unreachable"
+                          ? "text-red-400"
+                          : "text-muted-foreground"
+                      }
+                    >
+                      [{entry.status}]
+                    </span>{" "}
+                    <span className="text-foreground">{entry.task}</span>
+                    {detail && (
+                      <div className="text-muted-foreground ml-6 whitespace-pre-wrap break-all">
+                        {detail}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

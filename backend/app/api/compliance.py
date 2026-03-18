@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.host import Host
@@ -60,10 +61,10 @@ async def scan_details(
     for scan, host in rows.all():
         if not scan.is_reachable:
             status = "unreachable"
-        elif scan.reboot_required:
-            status = "reboot_required"
         elif not scan.is_compliant:
             status = "non_compliant"
+        elif scan.reboot_required:
+            status = "reboot_required"
         else:
             status = "compliant"
 
@@ -77,6 +78,7 @@ async def scan_details(
                 "pending_update_count": len(scan.pending_updates) if scan.pending_updates else 0,
                 "reboot_required": scan.reboot_required,
                 "worker_queue": scan.worker_queue,
+                "raw_log": scan.raw_log or [],
             }
         )
 
@@ -89,11 +91,19 @@ async def trigger_scan(
     host_ids: list[str] | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    host_load_opts = (
+        selectinload(Host.children).selectinload(Host.children),
+        selectinload(Host.site_rel),
+    )
     if host_ids:
-        result = await db.execute(select(Host).where(Host.id.in_(host_ids)))
+        result = await db.execute(
+            select(Host).where(Host.id.in_(host_ids)).options(*host_load_opts)
+        )
         hosts = list(result.scalars().all())
     else:
-        result = await db.execute(select(Host).where(Host.is_active == True))
+        result = await db.execute(
+            select(Host).where(Host.is_active == True).options(*host_load_opts)
+        )
         hosts = list(result.scalars().all())
 
     all_sites = collect_site_queues(hosts)

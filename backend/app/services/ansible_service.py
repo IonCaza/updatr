@@ -41,7 +41,9 @@ def build_inventory(hosts: list, credentials: dict) -> dict:
             )
 
             if cred.type == "ssh-password" and cred.encrypted_password:
-                host_vars["ansible_password"] = decrypt(cred.encrypted_password)
+                pw = decrypt(cred.encrypted_password)
+                host_vars["ansible_password"] = pw
+                host_vars["ansible_become_password"] = pw
             elif cred.type == "ssh-key" and cred.encrypted_private_key:
                 key_path = write_temp_key_file(
                     decrypt(cred.encrypted_private_key), host.id

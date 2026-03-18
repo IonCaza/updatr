@@ -28,6 +28,12 @@ interface ActivityEntry {
   queues?: string | null;
 }
 
+interface ScanLogEntry {
+  task: string;
+  status: string;
+  output: { stdout?: string; stderr?: string; msg?: string };
+}
+
 interface ScanDetailHost {
   host_id: string;
   display_name: string;
@@ -37,6 +43,7 @@ interface ScanDetailHost {
   pending_update_count: number;
   reboot_required: boolean;
   worker_queue: string | null;
+  raw_log?: ScanLogEntry[];
 }
 
 interface ComplianceSummary {
@@ -85,7 +92,7 @@ const STATUS_META: Record<StatusKey, { label: string; color: string; badge: stri
     label: "Reboot Required",
     color: "text-orange-600",
     badge: "secondary",
-    description: "Updates applied but a reboot is needed.",
+    description: "Up to date but a system reboot is pending.",
   },
   unreachable: {
     label: "Unreachable",
@@ -124,6 +131,7 @@ export default function DashboardPage() {
   const [scanDetailHosts, setScanDetailHosts] = useState<ScanDetailHost[]>([]);
   const [scanDetailQueues, setScanDetailQueues] = useState<string[]>([]);
   const [scanDetailLoading, setScanDetailLoading] = useState(false);
+  const [expandedScanHosts, setExpandedScanHosts] = useState<Set<string>>(new Set());
 
   const router = useRouter();
 
@@ -194,6 +202,7 @@ export default function DashboardPage() {
     setScanDetailTime(scanAt);
     setScanDetailOpen(true);
     setScanDetailLoading(true);
+    setExpandedScanHosts(new Set());
     try {
       const data = await apiFetch<{ scanned_at: string; queues: string[]; hosts: ScanDetailHost[] }>(
         `/api/compliance/scan-details?at=${encodeURIComponent(scanAt)}`
@@ -562,52 +571,106 @@ export default function DashboardPage() {
             <p className="text-sm text-muted-foreground py-4 text-center">No scan results found.</p>
           ) : (
             <div className="space-y-1.5 mt-2">
-              {scanDetailHosts.map((h) => (
-                <div
-                  key={h.host_id}
-                  className="flex items-center justify-between rounded-md border px-3 py-2"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className={`inline-block h-2 w-2 rounded-full shrink-0 ${
-                        h.status === "compliant"
-                          ? "bg-green-500"
-                          : h.status === "unreachable"
-                          ? "bg-red-500"
-                          : h.status === "reboot_required"
-                          ? "bg-orange-500"
-                          : "bg-yellow-500"
+              {scanDetailHosts.map((h) => {
+                const hasLog = h.raw_log && h.raw_log.length > 0;
+                const isExpanded = expandedScanHosts.has(h.host_id);
+                return (
+                  <div key={h.host_id} className="rounded-md border overflow-hidden">
+                    <div
+                      className={`flex items-center justify-between px-3 py-2 ${
+                        hasLog ? "cursor-pointer hover:bg-muted/50" : ""
                       }`}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{h.display_name}</p>
-                      <p className="text-[10px] text-muted-foreground truncate">{h.hostname}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0 ml-3">
-                    {h.worker_queue && (
-                      <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                        {h.worker_queue}
-                      </Badge>
-                    )}
-                    <Badge variant="outline" className="text-[10px]">
-                      {h.os_type}
-                    </Badge>
-                    <Badge
-                      variant={h.status === "compliant" ? "default" : "secondary"}
-                      className="text-[10px]"
+                      onClick={() => {
+                        if (!hasLog) return;
+                        setExpandedScanHosts((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(h.host_id)) next.delete(h.host_id);
+                          else next.add(h.host_id);
+                          return next;
+                        });
+                      }}
                     >
-                      {h.status === "compliant"
-                        ? "Compliant"
-                        : h.status === "unreachable"
-                        ? "Unreachable"
-                        : h.status === "reboot_required"
-                        ? "Reboot"
-                        : `${h.pending_update_count} update${h.pending_update_count !== 1 ? "s" : ""}`}
-                    </Badge>
+                      <div className="flex items-center gap-2 min-w-0">
+                        {hasLog && (
+                          <span className="text-[10px] text-muted-foreground shrink-0 w-3">
+                            {isExpanded ? "\u25BC" : "\u25B6"}
+                          </span>
+                        )}
+                        <span
+                          className={`inline-block h-2 w-2 rounded-full shrink-0 ${
+                            h.status === "compliant"
+                              ? "bg-green-500"
+                              : h.status === "unreachable"
+                              ? "bg-red-500"
+                              : h.status === "reboot_required"
+                              ? "bg-orange-500"
+                              : "bg-yellow-500"
+                          }`}
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{h.display_name}</p>
+                          <p className="text-[10px] text-muted-foreground truncate">{h.hostname}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0 ml-3">
+                        {h.worker_queue && (
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                            {h.worker_queue}
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="text-[10px]">
+                          {h.os_type}
+                        </Badge>
+                        <Badge
+                          variant={h.status === "compliant" ? "default" : "secondary"}
+                          className="text-[10px]"
+                        >
+                          {h.status === "compliant"
+                            ? "Compliant"
+                            : h.status === "unreachable"
+                            ? "Unreachable"
+                            : h.status === "reboot_required"
+                            ? "Reboot"
+                            : `${h.pending_update_count} update${h.pending_update_count !== 1 ? "s" : ""}`}
+                        </Badge>
+                      </div>
+                    </div>
+                    {isExpanded && h.raw_log && (
+                      <div className="border-t bg-muted/30 px-3 py-2 space-y-1">
+                        {h.raw_log.map((entry, i) => {
+                          const detail =
+                            entry.output?.msg || entry.output?.stdout || entry.output?.stderr || "";
+                          return (
+                            <div key={i} className="font-mono text-[11px] leading-relaxed">
+                              <span
+                                className={
+                                  entry.status === "ok"
+                                    ? "text-green-600"
+                                    : entry.status === "failed"
+                                    ? "text-red-600"
+                                    : entry.status === "unreachable"
+                                    ? "text-red-400"
+                                    : "text-muted-foreground"
+                                }
+                              >
+                                [{entry.status}]
+                              </span>{" "}
+                              <span className="text-foreground">{entry.task}</span>
+                              {detail && (
+                                <span className="text-muted-foreground ml-2 break-all">
+                                  {detail.length > 200
+                                    ? detail.slice(0, 200) + "\u2026"
+                                    : detail}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </DialogContent>

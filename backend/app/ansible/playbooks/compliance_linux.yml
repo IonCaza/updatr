@@ -9,6 +9,7 @@
         update_cache: true
         cache_valid_time: 3600
       when: ansible_os_family == "Debian"
+      ignore_errors: true
 
     - name: List upgradable packages (Debian/Ubuntu)
       ansible.builtin.shell: apt list --upgradable 2>/dev/null | grep -v "^Listing"

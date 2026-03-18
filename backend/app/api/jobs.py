@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from jwt import ExpiredSignatureError, InvalidTokenError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
@@ -56,8 +57,12 @@ async def create_patch_job(body: JobCreate, db: AsyncSession = Depends(get_db)):
         reboot_policy=body.reboot_policy,
     )
 
+    host_load_opts = (
+        selectinload(Host.children).selectinload(Host.children),
+        selectinload(Host.site_rel),
+    )
     result = await db.execute(
-        select(Host).where(Host.id.in_(body.host_ids))
+        select(Host).where(Host.id.in_(body.host_ids)).options(*host_load_opts)
     )
     hosts = list(result.scalars().all())
 

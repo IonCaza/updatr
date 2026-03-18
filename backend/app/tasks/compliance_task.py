@@ -29,7 +29,7 @@ def _load_hosts(host_ids: list[str] | None = None):
 
 def _save_scan(host_id: str, is_compliant: bool, is_reachable: bool,
                reboot_required: bool, pending_updates: list | None = None,
-               worker_queue: str | None = None):
+               worker_queue: str | None = None, raw_log: list | None = None):
     with SyncSession() as db:
         scan = ComplianceScan(
             host_id=host_id,
@@ -38,6 +38,7 @@ def _save_scan(host_id: str, is_compliant: bool, is_reachable: bool,
             reboot_required=reboot_required,
             pending_updates=pending_updates or [],
             worker_queue=worker_queue,
+            raw_log=raw_log or [],
         )
         db.add(scan)
         db.commit()
@@ -74,6 +75,8 @@ def compliance_scan(self, host_ids: list[str] | None = None):
             all_events.extend(parse_events(result))
 
     host_compliance: dict[str, dict] = {}
+    host_events: dict[str, list] = defaultdict(list)
+
     for event in all_events:
         host_name = event["host"]
         host_id = host_name_to_id.get(host_name)
@@ -93,10 +96,36 @@ def compliance_scan(self, host_ids: list[str] | None = None):
         if compliance:
             host_compliance[host_id]["compliance_result"] = compliance
 
+        result = event.get("result", {})
+        log_entry: dict = {
+            "task": event["task"],
+            "status": event["status"],
+            "output": {},
+        }
+        for key in ("stdout", "stderr", "msg"):
+            val = result.get(key, "")
+            if val:
+                log_entry["output"][key] = str(val)[:2000]
+        host_events[host_id].append(log_entry)
+
     scanned = set()
     for host_id, info in host_compliance.items():
         scanned.add(host_id)
         compliance = info["compliance_result"]
+        events_log = host_events.get(host_id, [])
+
+        if not compliance:
+            _save_scan(
+                host_id=host_id,
+                is_compliant=False,
+                is_reachable=info["is_reachable"],
+                reboot_required=False,
+                pending_updates=[],
+                worker_queue=worker_queue,
+                raw_log=events_log,
+            )
+            continue
+
         updates_list = compliance.get("pending_updates", [])
 
         _save_scan(
@@ -106,6 +135,7 @@ def compliance_scan(self, host_ids: list[str] | None = None):
             reboot_required=bool(compliance.get("reboot_required", False)),
             pending_updates=updates_list,
             worker_queue=worker_queue,
+            raw_log=events_log,
         )
 
     unreachable_hosts = set(host_name_to_id.values()) - scanned
@@ -116,6 +146,7 @@ def compliance_scan(self, host_ids: list[str] | None = None):
             is_reachable=False,
             reboot_required=False,
             worker_queue=worker_queue,
+            raw_log=[{"task": "connect", "status": "unreachable", "output": {}}],
         )
 
     cleanup_temp_key_files([h.id for h in hosts])
