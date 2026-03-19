@@ -22,10 +22,19 @@ async def get_compliance_summary(db: AsyncSession) -> dict:
     )
     scans = list(latest_scans.scalars().all())
 
-    compliant = sum(1 for s in scans if s.is_compliant)
-    non_compliant = sum(1 for s in scans if not s.is_compliant and s.is_reachable)
-    reboot_required = sum(1 for s in scans if s.reboot_required)
-    unreachable = sum(1 for s in scans if not s.is_reachable)
+    unreachable = 0
+    non_compliant = 0
+    reboot_required = 0
+    compliant = 0
+    for s in scans:
+        if not s.is_reachable:
+            unreachable += 1
+        elif not s.is_compliant:
+            non_compliant += 1
+        elif s.reboot_required:
+            reboot_required += 1
+        else:
+            compliant += 1
 
     last_scan = max((s.scanned_at for s in scans), default=None)
 

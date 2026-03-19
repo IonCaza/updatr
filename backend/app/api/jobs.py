@@ -20,7 +20,7 @@ from app.services.job_service import create_job, get_job, list_jobs
 from app.services.orchestration_service import compute_patch_waves
 from app.tasks.patch_task import patch_hosts
 from app.tasks.orchestrate_task import orchestrate_patch_job
-from app.services.queue_service import queue_for_host, collect_site_queues, queue_for_control_plane
+from app.services.queue_service import queue_for_host, collect_site_queues, queue_for_control_plane, get_active_queues
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(get_current_user)])
@@ -84,9 +84,10 @@ async def create_patch_job(body: JobCreate, db: AsyncSession = Depends(get_db)):
         )
     else:
         all_sites = collect_site_queues(hosts)
+        active_queues = await asyncio.to_thread(get_active_queues)
         hosts_by_queue: dict[str, list[str]] = {}
         for h in hosts:
-            queue = queue_for_host(h, all_sites)
+            queue = queue_for_host(h, all_sites, active_queues=active_queues)
             hosts_by_queue.setdefault(queue, []).append(h.id)
 
         for queue, queue_host_ids in hosts_by_queue.items():

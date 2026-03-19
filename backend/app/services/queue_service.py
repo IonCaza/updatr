@@ -14,6 +14,7 @@ queue_for_deployment  -- deployment operations (build, deploy, stop, …)
 Utility
 -------
 collect_site_queues   -- unique site queue names from a host list
+get_active_queues     -- queues with at least one active Celery consumer
 
 Constant
 --------
@@ -41,6 +42,19 @@ FALLBACK_QUEUE = "cm"
 
 
 # ── Private helpers ───────────────────────────────────────────────────
+
+def _ensure_consumed(queue: str, active_queues: set[str] | None) -> str:
+    """Return *queue* if it has a consumer, otherwise FALLBACK_QUEUE."""
+    if active_queues is None:
+        return queue
+    if queue in active_queues:
+        return queue
+    logger.info(
+        "Queue %r has no active consumer — rerouting to %s",
+        queue, FALLBACK_QUEUE,
+    )
+    return FALLBACK_QUEUE
+
 
 def _site_queue(host: Host) -> str:
     """Resolve the queue name for a host from its Site relationship.
@@ -76,7 +90,11 @@ def _is_worker_host(host: Host) -> bool:
 
 # ── 1. Host-targeted routing ─────────────────────────────────────────
 
-def queue_for_host(host: Host, all_sites: set[str] | None = None) -> str:
+def queue_for_host(
+    host: Host,
+    all_sites: set[str] | None = None,
+    active_queues: set[str] | None = None,
+) -> str:
     """Choose the queue for work that targets a specific host.
 
     Used by: patch jobs, compliance scans — anything that runs an
@@ -87,7 +105,8 @@ def queue_for_host(host: Host, all_sites: set[str] | None = None) -> str:
       2. Self-protection — if the host (or any descendant) runs a
          Celery worker, route to a *different* site so the worker
          never reboots the machine it lives on.
-      3. Host's own site queue.
+      3. Host's own site queue — but only if a consumer is active there.
+      4. FALLBACK_QUEUE when no consumer exists for the resolved queue.
     """
     override = getattr(host, "worker_override", None)
     if override:
@@ -99,10 +118,11 @@ def queue_for_host(host: Host, all_sites: set[str] | None = None) -> str:
         if all_sites:
             other_sites = all_sites - {own_site}
             if other_sites:
-                return sorted(other_sites)[0]
-        return own_site
+                resolved = sorted(other_sites)[0]
+                return _ensure_consumed(resolved, active_queues)
+        return _ensure_consumed(own_site, active_queues)
 
-    return own_site
+    return _ensure_consumed(own_site, active_queues)
 
 
 # ── 2. Subnet / CIDR-targeted routing ────────────────────────────────
@@ -223,3 +243,28 @@ async def queue_for_deployment(db: AsyncSession) -> str:
 def collect_site_queues(hosts: list[Host]) -> set[str]:
     """Return the set of unique site queue names from a list of hosts."""
     return {_site_queue(h) for h in hosts}
+
+
+def get_active_queues() -> set[str]:
+    """Return queue names that have at least one active Celery consumer.
+
+    Uses the Celery control-plane inspect API with a short timeout.
+    Falls back to ``{FALLBACK_QUEUE}`` on any error so dispatchers
+    never block on an unreachable broker.
+
+    **Synchronous** — call via ``asyncio.to_thread`` from async code.
+    """
+    from app.tasks.celery_app import celery_app
+
+    try:
+        result = celery_app.control.inspect(timeout=3.0).active_queues()
+        if not result:
+            return {FALLBACK_QUEUE}
+        queues: set[str] = set()
+        for worker_queues in result.values():
+            for q in worker_queues:
+                queues.add(q["name"])
+        return queues or {FALLBACK_QUEUE}
+    except Exception:
+        logger.warning("Failed to inspect active Celery queues — using fallback")
+        return {FALLBACK_QUEUE}

@@ -4,13 +4,28 @@
   become: true
   gather_facts: true
   tasks:
-    - name: Update apt cache and upgrade all packages (Debian/Ubuntu)
+    - name: Enable phased updates for patching (Debian/Ubuntu)
+      ansible.builtin.copy:
+        content: 'APT::Get::Always-Include-Phased-Updates "true";'
+        dest: /etc/apt/apt.conf.d/99-updatr-force-phased
+        mode: "0644"
+      when: ansible_os_family == "Debian"
+
+    - name: Update apt cache and dist-upgrade all packages (Debian/Ubuntu)
       ansible.builtin.apt:
         update_cache: true
-        upgrade: safe
+        upgrade: dist
         cache_valid_time: 3600
+      environment:
+        DEBIAN_FRONTEND: noninteractive
       when: ansible_os_family == "Debian"
       register: apt_result
+
+    - name: Remove phased update override (Debian/Ubuntu)
+      ansible.builtin.file:
+        path: /etc/apt/apt.conf.d/99-updatr-force-phased
+        state: absent
+      when: ansible_os_family == "Debian"
 
     - name: Upgrade all packages via dnf (RHEL/Fedora)
       ansible.builtin.dnf:

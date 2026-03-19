@@ -12,6 +12,12 @@
       register: pve_check
       failed_when: pve_check.rc != 0
 
+    - name: Enable phased updates for patching
+      ansible.builtin.copy:
+        content: 'APT::Get::Always-Include-Phased-Updates "true";'
+        dest: /etc/apt/apt.conf.d/99-updatr-force-phased
+        mode: "0644"
+
     - name: Update apt cache and dist-upgrade all packages
       ansible.builtin.apt:
         update_cache: true
@@ -20,6 +26,11 @@
         dpkg_options: "force-confdef,force-confold"
         force_apt_get: true
       register: apt_result
+
+    - name: Remove phased update override
+      ansible.builtin.file:
+        path: /etc/apt/apt.conf.d/99-updatr-force-phased
+        state: absent
 
     - name: Check if reboot is required
       ansible.builtin.stat:

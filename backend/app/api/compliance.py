@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,7 +12,7 @@ from app.models.compliance import ComplianceScan
 from app.schemas.compliance import ComplianceSummary, HostComplianceDetail
 from app.services.compliance_service import get_compliance_summary, get_host_compliance, get_hosts_by_status
 from app.tasks.compliance_task import compliance_scan
-from app.services.queue_service import queue_for_host, collect_site_queues
+from app.services.queue_service import queue_for_host, collect_site_queues, get_active_queues
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/compliance", tags=["compliance"], dependencies=[Depends(get_current_user)])
@@ -89,30 +90,39 @@ async def scan_details(
 @router.post("/scan", status_code=202)
 async def trigger_scan(
     host_ids: list[str] | None = None,
+    site_ids: list[str] | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     host_load_opts = (
         selectinload(Host.children).selectinload(Host.children),
         selectinload(Host.site_rel),
     )
+    query = select(Host).where(Host.is_active == True).options(*host_load_opts)
+
     if host_ids:
-        result = await db.execute(
-            select(Host).where(Host.id.in_(host_ids)).options(*host_load_opts)
-        )
-        hosts = list(result.scalars().all())
-    else:
-        result = await db.execute(
-            select(Host).where(Host.is_active == True).options(*host_load_opts)
-        )
-        hosts = list(result.scalars().all())
+        query = select(Host).where(Host.id.in_(host_ids)).options(*host_load_opts)
+    elif site_ids:
+        query = query.where(Host.site_id.in_(site_ids))
+
+    result = await db.execute(query)
+    hosts = list(result.scalars().all())
+
+    if not hosts:
+        return {"message": "No hosts matched the selected scope", "queues": 0}
 
     all_sites = collect_site_queues(hosts)
+    active_queues = await asyncio.to_thread(get_active_queues)
+
     hosts_by_queue: dict[str, list[str]] = {}
     for h in hosts:
-        queue = queue_for_host(h, all_sites)
+        queue = queue_for_host(h, all_sites, active_queues=active_queues)
         hosts_by_queue.setdefault(queue, []).append(h.id)
 
     for queue, queue_host_ids in hosts_by_queue.items():
         compliance_scan.apply_async(args=[queue_host_ids], queue=queue)
 
-    return {"message": f"Compliance scan triggered across {len(hosts_by_queue)} queue(s)"}
+    return {
+        "message": f"Compliance scan triggered across {len(hosts_by_queue)} queue(s)",
+        "queues": len(hosts_by_queue),
+        "host_count": len(hosts),
+    }

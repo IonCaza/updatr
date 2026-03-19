@@ -73,6 +73,13 @@ interface WorkerHost {
   worker_override: string | null;
 }
 
+interface SiteInfo {
+  id: string;
+  name: string;
+  display_name: string;
+  host_count: number;
+}
+
 type StatusKey = "compliant" | "non_compliant" | "reboot_required" | "unreachable";
 
 const STATUS_META: Record<StatusKey, { label: string; color: string; badge: string; description: string }> = {
@@ -126,6 +133,11 @@ export default function DashboardPage() {
   const [renameValue, setRenameValue] = useState("");
   const [renaming, setRenaming] = useState(false);
 
+  const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [scanSites, setScanSites] = useState<SiteInfo[]>([]);
+  const [selectedSites, setSelectedSites] = useState<Set<string>>(new Set());
+  const [scanSitesLoading, setScanSitesLoading] = useState(false);
+
   const [scanDetailOpen, setScanDetailOpen] = useState(false);
   const [scanDetailTime, setScanDetailTime] = useState<string | null>(null);
   const [scanDetailHosts, setScanDetailHosts] = useState<ScanDetailHost[]>([]);
@@ -168,11 +180,39 @@ export default function DashboardPage() {
     loadWorkers();
   }, [load, loadActivity, loadWorkers]);
 
+  const openScanModal = async () => {
+    setScanModalOpen(true);
+    setScanSitesLoading(true);
+    try {
+      const sites = await apiFetch<SiteInfo[]>("/api/sites");
+      setScanSites(sites.filter((s) => s.host_count > 0));
+      setSelectedSites(new Set(sites.filter((s) => s.host_count > 0).map((s) => s.id)));
+    } catch {
+      toast.error("Failed to load sites");
+      setScanSites([]);
+    } finally {
+      setScanSitesLoading(false);
+    }
+  };
+
   const triggerScan = async () => {
     setScanning(true);
+    setScanModalOpen(false);
     try {
-      await apiFetch("/api/compliance/scan", { method: "POST" });
-      toast.success("Compliance scan triggered — refreshing in a few seconds");
+      const body: Record<string, unknown> = {};
+      if (selectedSites.size > 0 && selectedSites.size < scanSites.length) {
+        body.site_ids = [...selectedSites];
+      }
+      await apiFetch("/api/compliance/scan", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const totalHosts = scanSites
+        .filter((s) => selectedSites.has(s.id))
+        .reduce((sum, s) => sum + s.host_count, 0);
+      toast.success(
+        `Scan triggered for ${totalHosts} host(s) across ${selectedSites.size} site(s)`
+      );
       const poll = setInterval(async () => {
         await load();
         await loadActivity();
@@ -282,7 +322,7 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-bold">Dashboard</h1>
           <p className="text-muted-foreground mt-1">Patch compliance overview</p>
         </div>
-        <Button onClick={triggerScan} disabled={scanning}>
+        <Button onClick={openScanModal} disabled={scanning}>
           {scanning ? "Scanning..." : "Scan Now"}
         </Button>
       </div>
@@ -374,6 +414,92 @@ export default function DashboardPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Scan scope modal */}
+      <Dialog open={scanModalOpen} onOpenChange={setScanModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Run Compliance Scan</DialogTitle>
+            <DialogDescription>
+              Select which sites to include in the scan.
+            </DialogDescription>
+          </DialogHeader>
+          {scanSitesLoading ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">Loading sites...</p>
+          ) : scanSites.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              No sites with active hosts found.
+            </p>
+          ) : (
+            <>
+              <label className="flex items-center gap-2 px-2 py-1 text-sm font-medium border-b">
+                <input
+                  type="checkbox"
+                  checked={selectedSites.size === scanSites.length}
+                  onChange={() => {
+                    if (selectedSites.size === scanSites.length) {
+                      setSelectedSites(new Set());
+                    } else {
+                      setSelectedSites(new Set(scanSites.map((s) => s.id)));
+                    }
+                  }}
+                  className="rounded"
+                />
+                <span>All sites</span>
+                <span className="text-muted-foreground text-xs ml-auto">
+                  {scanSites.reduce((sum, s) => sum + s.host_count, 0)} hosts total
+                </span>
+              </label>
+              <div className="space-y-1 max-h-64 overflow-y-auto">
+                {scanSites.map((site) => (
+                  <label
+                    key={site.id}
+                    className="flex items-center gap-2 px-2 py-2 rounded hover:bg-muted cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedSites.has(site.id)}
+                      onChange={() => {
+                        setSelectedSites((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(site.id)) next.delete(site.id);
+                          else next.add(site.id);
+                          return next;
+                        });
+                      }}
+                      className="rounded"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{site.display_name}</p>
+                      <p className="text-[10px] text-muted-foreground">{site.name}</p>
+                    </div>
+                    <Badge variant="outline" className="text-xs shrink-0">
+                      {site.host_count} host{site.host_count !== 1 ? "s" : ""}
+                    </Badge>
+                  </label>
+                ))}
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t">
+                <p className="text-sm text-muted-foreground">
+                  {selectedSites.size} of {scanSites.length} site(s) selected
+                  {" \u00B7 "}
+                  {scanSites
+                    .filter((s) => selectedSites.has(s.id))
+                    .reduce((sum, s) => sum + s.host_count, 0)}{" "}
+                  host(s)
+                </p>
+                <Button
+                  onClick={triggerScan}
+                  disabled={selectedSites.size === 0}
+                  size="sm"
+                >
+                  Run Scan
+                </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Compliance detail modal */}
       <Dialog open={detailKey !== null} onOpenChange={(open) => !open && setDetailKey(null)}>
